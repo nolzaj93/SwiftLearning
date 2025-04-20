@@ -12,7 +12,8 @@ import SwiftData
 struct SwiftLearningApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Chat.self,
+            Message.self
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -25,7 +26,7 @@ struct SwiftLearningApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ChatListView()
         }
         .modelContainer(sharedModelContainer)
     }
