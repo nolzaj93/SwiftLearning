@@ -1,25 +1,47 @@
 import Foundation
 import SwiftData
+import Combine
 
 @MainActor
 class ChatViewModel: ObservableObject {
     
     @Published var messages: [Message] = []
     @Published var inputText: String = ""
-    @Published var chatTitle: String = "New Chat"
+    @Published var chatTitle: String
+    @Published var isAwaitingResponse: Bool = false
+    
+    @Published var isInternetReachable: Bool = true {
+        didSet {
+            print("isConnected changed to: \(isInternetReachable)")
+        }
+    }
+    private var cancellables = Set<AnyCancellable>()
     
     private let service = StreamingService()
     private var context: ModelContext?
     private var chatId : UUID
-    private var chat: Chat? {
-        didSet {
-            // Update the chat title whenever the chat changes
-            chatTitle = chat?.title ?? "New Chat"
-        }
-    }
+    private var chat: Chat?
+    private let networkMonitor: NetworkMonitor
     
-    init(chatId: UUID) {
+    @MainActor
+    init(chatId: UUID, networkMonitor: NetworkMonitor) {
         self.chatId = chatId
+        self.chatTitle = ""
+        self.networkMonitor = networkMonitor
+        
+        networkMonitor.$isInternetReachable //access the published variable
+                    .receive(on: DispatchQueue.main) //move any updates to the value to the main thread
+                    .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+                    .assign(to: &$isInternetReachable) //assign to the local variable isConnected, & means pass the binding
+                
+//        // Now react to changes, e.g.:
+//        networkMonitor.$isConnected
+//            .sink { [weak self] connected in
+//                if connected {
+//                    self?.trySyncPendingMessages()
+//                }
+//            }
+//            .store(in: &cancellables)
     }
     
     func setContext(_ context: ModelContext) {
@@ -50,30 +72,34 @@ class ChatViewModel: ObservableObject {
     func sendMessage() {
         guard let chat = chat,
                 !inputText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-
-        let userMessage = Message(id: UUID(), role: .user, content: inputText, chat: chat)
-        if chat.messages.count > 1 {
-            chat.messages[chat.messages.count - 1].nextMessage = userMessage
+        
+        // TODO: not the right way to do this
+        Task {
+            isInternetReachable = await NetworkMonitor.shared.checkConnection()
+            if isInternetReachable {
+                print("Internet OK 🚀")
+            } else {
+                print("Internet failed 🔥")
+                return
+            }
         }
         
-        //need to find the last message if there is one and set it's next message to this
+
+        let userMessage = Message(id: UUID(), role: .user, content: inputText, chat: chat)
+        if messages.count > 1 {
+            messages[messages.count - 1].nextMessage = userMessage
+        }
+        
         if chat.firstMessage == nil {
             chat.firstMessage = userMessage
             if chat.title == "New Chat" {
                     chat.title = generateTitle(from: userMessage.content)
+                //
                 }
-//            guard let context else { return }
-//            do {
-//                    try context.save()
-//                    print("✅ Chat saved successfully")
-//                } catch {
-//                    print("❌ Failed to save chat: \(error)")
-//                }
         }
         
         
         chat.messages.append(userMessage)
-        
         messages.append(userMessage)
         
 
@@ -90,18 +116,27 @@ class ChatViewModel: ObservableObject {
         inputText = ""
 
         Task {
+            
+            isAwaitingResponse = true
+            
+            defer {
+                isAwaitingResponse = false
+            }
+            
             guard let url = URL(string: "http://10.0.0.14:8000/generate") else {
                 updateMessage(id: assistantMessageID, content: "❌ Invalid URL")
                 return
             }
 
             do {
-                let stream = try await service.streamPOST(to: url, body: ["prompt": prompt, "model":"llama2", "stream": true])
+                let stream = try await service.streamPOST(to: url, body: ["prompt": prompt, "stream": true])
 
                 for try await line in stream {
                     if let data = line.data(using: .utf8) {
                         do {
                             let chunk = try JSONDecoder().decode(StreamChunk.self, from: data)
+                            isAwaitingResponse = false
+                            print(chunk.response)
                             streamingContent += chunk.response
                             updateMessage(id: assistantMessageID, content: streamingContent)
                         } catch {
@@ -110,24 +145,30 @@ class ChatViewModel: ObservableObject {
                     }
                 }
             } catch {
-                updateMessage(id: assistantMessageID, content: "❌ Error: \(error.localizedDescription)")
+                //TODO: distinguish if the error is on the end of the API, or if the network connection is bad
+                updateMessage(id: assistantMessageID, content: "❌ Error: \(error.localizedDescription)", isError: true)
             }
         }
     }
     
     //updates the assistant message
-    private func updateMessage(id: UUID, content: String) {
+    private func updateMessage(id: UUID, content: String, isError: Bool = false) {
         if let index = messages.firstIndex(where: { $0.id == id }) {
             messages[index].content = content
-            saveMessage(message: messages[index])
+            print(isError)
+            if(isError){
+                messages[index].isErrorMessage = true
+                chat?.messages[index].isErrorMessage = true
+            }
+            saveMessage(message: messages[index], isInsert: false)
         }
     }
     
-    private func saveMessage(message: Message) {
+    private func saveMessage(message: Message, isInsert: Bool = true) {
+        if isInsert {
+            context?.insert(message)
+        }
         
-        context?.insert(message)
-        
-        // Persist changes
         do {
             try context?.save()
 
@@ -137,6 +178,15 @@ class ChatViewModel: ObservableObject {
     }
     
     func loadMessages() {
+        Task {
+            isInternetReachable = await NetworkMonitor.shared.checkConnection()
+            if isInternetReachable {
+                print("Internet OK 🚀")
+            } else {
+                print("Internet failed 🔥")
+            }
+        }
+        
         guard let context = context else {
             print("⚠️ No ModelContext set in ViewModel")
             return
@@ -146,16 +196,18 @@ class ChatViewModel: ObservableObject {
                 print("⚠️ No Chat found in ViewModel")
                 return
             }
-        
+        chatTitle = chat.title
         let chatID = chat.id
         do {
             let descriptor = FetchDescriptor<Message>(
                 predicate: #Predicate { message in
-                    message.chat?.id == chatID
+                    message.chat?.id == chatID && !message.isErrorMessage
                 }
             )
             let fetchedMessages = try context.fetch(descriptor)
             let firstMessage = chat.firstMessage
+            print(chat.firstMessage?.content ?? "nil")
+            
             self.messages = orderedMessages(from: fetchedMessages, firstMessage: firstMessage)
         } catch {
             print("Failed to load messages: \(error)")
@@ -169,6 +221,8 @@ class ChatViewModel: ObservableObject {
         // Build a lookup dictionary so we can find messages quickly
         for message in messages {
             lookup[message.id] = message
+            //print(message.nextMessage?.id ?? "nil")
+            print(message.isErrorMessage)
         }
         
         var current = firstMessage
@@ -183,8 +237,8 @@ class ChatViewModel: ObservableObject {
 
     private func generateTitle(from content: String) -> String {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.count > 20 {
-            return String(trimmed.prefix(20)) + "..."
+        if trimmed.count > 30 {
+            return String(trimmed.prefix(30)) + "..."
         } else {
             return trimmed.isEmpty ? "Untitled Chat" : trimmed
         }

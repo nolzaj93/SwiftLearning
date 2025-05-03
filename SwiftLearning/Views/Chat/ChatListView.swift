@@ -4,56 +4,103 @@ import SwiftData
 struct ChatListView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \Chat.id) private var chats: [Chat]
+    @EnvironmentObject var networkMonitor: NetworkMonitor
     
     @State private var newChat: Chat? = nil
-
+    
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(chats, id: \.id) { chat in
-                    NavigationLink(destination: ChatView(chatId: chat.id)) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(chat.title)
-                                .font(.headline)
-                                .foregroundColor(.primary)
+            ZStack {
+                Color(.systemGroupedBackground)
+                    .ignoresSafeArea()
+                VStack{
+                    Group {
+                        if chats.isEmpty {
+                            VStack(spacing: 20) {
+                                Image(systemName: "bubble.left.and.bubble.right.fill")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 120, height: 120)
+                                    .foregroundColor(.secondary)
+                                    .padding(.bottom, 10)
+                                
+                                Text("Ready to Learn iOS Development?")
+                                    .font(.title2)
+                                    .fontWeight(.bold)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal)
+                                
+                                Button(action: createNewChat) {
+                                    Text("Start Learning")
+                                        .font(.headline)
+                                        .foregroundColor(Color.primary)
+                                        .padding()
+                                        .frame(maxWidth: .infinity)
+                                        .background(Color.secondary)
+                                        .cornerRadius(12)
+                                        .padding(.horizontal, 40)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            List {
+                                ForEach(chats, id: \.id) { chat in
+                                    NavigationLink(destination: ChatView(chatId: chat.id)) {
+                                        VStack() {
+                                            Text(chat.title)
+                                                .font(.headline)
+                                                .foregroundColor(.primary)
+                                        }
+                                    }
+                                }
+                                .onDelete(perform: deleteChats)
+                            }
+                            .listStyle(.plain)
+                            .scrollContentBackground(.hidden)
+                            .background(Color.clear)
+                            
+                            
                         }
-                        .padding(.vertical, 8)
                     }
-                    .listRowBackground(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.systemGray6))
-                            .padding(.vertical, 4)
-                    )
+                    if(!networkMonitor.isInternetReachable) {
+                        InternetErrorView()
+                    }
                 }
-                .onDelete(perform: deleteChats)
+                
+                
             }
-            .listStyle(.plain)
-            .background(Color(.systemGroupedBackground))
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .principal) {
                     Text("SwiftLearning")
                         .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(.accentColor)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        let chat = Chat(title: "New Chat")
-                        context.insert(chat)
-                        do {
-                            try context.save()
-                            newChat = chat
-                        } catch {
-                            print("❌ Error saving context: \(error)")
-                        }
+                        createNewChat()
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .foregroundColor(.primary)
                 }
+                
             }
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(item: $newChat) { chat in
                 ChatView(chatId: chat.id)
             }
+        }
+        .tint(.primary)
+    }
+    
+    private func createNewChat() {
+        let chat = Chat(title: "New Chat")
+        context.insert(chat)
+        do {
+            try context.save()
+            newChat = chat
+        } catch {
+            print("❌ Error saving context: \(error)")
         }
     }
     
@@ -70,3 +117,9 @@ struct ChatListView: View {
         }
     }
 }
+
+#Preview("Chat List Debug") {
+    ChatListView()
+        .modelContainer(for: Chat.self, inMemory: true)
+}
+

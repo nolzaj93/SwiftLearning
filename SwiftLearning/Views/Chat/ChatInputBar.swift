@@ -4,33 +4,64 @@ struct ChatInputBar: View {
     @Binding var inputText: String
     var onSend: () -> Void
     
-    @FocusState private var isFocused: Bool // <-- New: to control keyboard
+    @FocusState private var isFocused: Bool
+    
+    @State private var lastCheckTime: Date? = nil
+    @State private var isCheckingInternet: Bool = false
+    
+    @State var isSendDisabled: Bool = true
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Type a message...", text: $inputText, axis: .vertical)
-                .padding(12)
-                .background(Color(.secondarySystemBackground))
-                .cornerRadius(20)
-                .focused($isFocused)
-                .submitLabel(.send) // shows "Send" instead of "Return"
-                .onSubmit {
-                    send()
-                }
-            
-            Button(action: send) {
-                Image(systemName: "paperplane.fill")
-                    .foregroundColor(.white)
-                    .padding(10)
-                    .background(Color.accentColor)
-                    .clipShape(Circle())
+        
+        VStack {
+//            if isFocused {
+//                Button(action: {
+//                    isFocused = false
+//                }) {
+//                    Text("Done")
+//                        .foregroundColor(.accentColor) // Text color
+//                        .padding(12)
+//                        // Transparent background
+//                        .cornerRadius(15)
+//                }
+//                .frame(maxWidth: .infinity, alignment: .trailing)
+//                .background(Color.secondary) 
+//
+//            }
+//            if(!NetworkMonitor.shared.isInternetReachable) {
+//                    InternetErrorView()
+//                }
+            HStack(alignment: .bottom) {
+                TextField("Type a message...", text: $inputText, axis: .vertical)
+                    .padding(12)
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(20)
+                    .focused($isFocused)
+                    .submitLabel(.send)
+                    .onSubmit {
+                        send()
+                    }
+                    .onChange(of: inputText) {
+                        //checkInternet()
+                        updateSendButtonState()
+                    }
+                
+                    Button(action: send) {
+                        Image(systemName: "paperplane.fill")
+                            .foregroundColor(Color.primary)
+                            .padding(10)
+                            .background(Color.secondary)
+                            .clipShape(Circle())
+                    }
+                    .disabled(isSendDisabled)
+                    .opacity(isSendDisabled ? 0.5 : 1.0)
+                
             }
-            .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
-            .opacity(inputText.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1.0)
+            .padding()
+            .background(Color(.systemBackground))
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: -2)
+        .background(Color.clear)
+        
     }
     
     private func send() {
@@ -38,5 +69,34 @@ struct ChatInputBar: View {
         onSend()
         inputText = ""
         isFocused = false // <-- Hide the keyboard after send
+    }
+    
+    private func checkInternet() {
+        
+        let now = Date()
+                
+        // Check if 5 seconds have passed since the last check
+        if let lastCheck = lastCheckTime, now.timeIntervalSince(lastCheck) < 5 {
+            // If less than 5 seconds, do nothing
+            return
+        }
+
+        // Update the last check time
+        lastCheckTime = now
+        
+        Task {
+            if !isCheckingInternet {
+                isCheckingInternet.toggle()
+                let isInternetReachable = await NetworkMonitor.shared.checkConnection()
+                DispatchQueue.main.async {
+                    self.isCheckingInternet = false
+                    print(isInternetReachable ? "Internet OK 🚀" : "Internet failed 🔥")
+                }
+            }
+        }
+    }
+    
+    private func updateSendButtonState() {
+        isSendDisabled = !NetworkMonitor.shared.isInternetReachable || inputText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 }
