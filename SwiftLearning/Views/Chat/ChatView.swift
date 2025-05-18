@@ -9,11 +9,11 @@ struct ChatView: View {
     @State private var isEditing = false
     @State private var isScrolling : Bool
     
-    let chatId: UUID
+//    let chatId: UUID
 
-    init(chatId: UUID) {
-        self.chatId = chatId
-        _viewModel = StateObject(wrappedValue: ChatViewModel(chatId: chatId, networkMonitor: NetworkMonitor.shared))
+    init(viewModel: ChatViewModel) {
+//        self.chatId = chatId
+        _viewModel = StateObject(wrappedValue : viewModel)
         self.isScrolling = false
         
 //        Task{

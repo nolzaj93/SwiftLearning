@@ -34,7 +34,7 @@ struct SwiftLearningApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ChatListView()
+            HomeView()
         }
         .modelContainer(sharedModelContainer)
         .environmentObject(keyboardObserver)
